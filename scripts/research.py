@@ -81,6 +81,17 @@ def run_research(founder_name: str, company: str, raw_dir: str):
               .replace("{role}", "Founder")
               .replace("{inject kaide_labs_positioning.md here}", positioning))
 
+    prompt += "\n\n--- GROUNDING DATA ---\n"
+    for p in files_to_upload:
+        if "linkedin/activity_screenshots" in p.as_posix():
+            continue
+        if p.suffix.lower() in {".md", ".txt", ".html", ".htm"}:
+            try:
+                content = p.read_text(encoding="utf-8", errors="ignore")
+                prompt += f"\n\nSOURCE: {p.name}\n{content[:MAX_ARTIFACT_BYTES]}\n"
+            except Exception as e:
+                print(f"Warning: could not read {p}: {e}")
+
     print(f"\nReady to spend ~${ESTIMATED_COST_USD:.2f} on Deep Research Max for "
           f"{founder_name} at {company} ({len(artifacts)} artifacts attached).")
     print(f"Ctrl-C within {COST_GATE_SECONDS}s to abort.")
@@ -93,9 +104,10 @@ def run_research(founder_name: str, company: str, raw_dir: str):
     print(f"Starting research for {founder_name} at {company}...")
     interaction = client.interactions.create(
         agent=AGENT,
-        input=[prompt, *artifacts],
+        input=prompt,
         background=True,
     )
+
     print(f"Interaction started: {interaction.id}")
 
     current = None
