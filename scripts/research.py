@@ -1,12 +1,10 @@
 import os
 import sys
 import time
-import glob
 from pathlib import Path
 from google import genai
 import dotenv
 
-# Load env from .env file
 dotenv.load_dotenv()
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -19,8 +17,12 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 AGENT = "deep-research-max-preview-04-2026"
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 POLL_INTERVAL_SECONDS = 30
+MAX_POLL_ITERATIONS = 120  # 60 minutes wall-clock cap
 MAX_ARTIFACT_BYTES = 200_000
 ALLOWED_EXTENSIONS = {".pdf", ".md", ".txt", ".html", ".htm", ".png", ".jpg", ".jpeg"}
+ESTIMATED_COST_USD = 5.0
+COST_GATE_SECONDS = 5
+
 
 def run_research(founder_name: str, company: str, raw_dir: str):
     raw_path = Path(raw_dir)
@@ -28,33 +30,30 @@ def run_research(founder_name: str, company: str, raw_dir: str):
         print(f"Error: raw_dir '{raw_dir}' not found.")
         sys.exit(2)
 
-    files_in_raw = list(raw_path.rglob("*"))
-    files_to_upload = [f for f in files_in_raw if f.is_file()]
-
+    files_to_upload = [f for f in raw_path.rglob("*") if f.is_file()]
     if not files_to_upload:
         print("Error: raw/ is empty — run orchestrate.py first or capture LinkedIn manually")
         sys.exit(1)
 
     artifacts = []
+    temp_paths = []
     for p in files_to_upload:
-        # Skip screenshots per spec §6.1.3
-        if "linkedin/activity_screenshots" in str(p.as_posix()):
+        if "linkedin/activity_screenshots" in p.as_posix():
             continue
-        
         if p.suffix.lower() not in ALLOWED_EXTENSIONS:
             print(f"Warning: Skipping {p} (unsupported extension)")
             continue
 
         file_to_upload = p
         if p.stat().st_size > MAX_ARTIFACT_BYTES:
-            # Simple truncation for text-like files
             if p.suffix.lower() in {".md", ".txt", ".html", ".htm"}:
                 print(f"Truncating {p} (> {MAX_ARTIFACT_BYTES} bytes)")
                 content = p.read_text(encoding="utf-8", errors="ignore")
-                truncated_content = content[:MAX_ARTIFACT_BYTES] + "\n\n[...truncated]"
-                temp_truncated = p.with_suffix(p.suffix + ".truncated.md")
-                temp_truncated.write_text(truncated_content, encoding="utf-8")
-                file_to_upload = temp_truncated
+                truncated = content[:MAX_ARTIFACT_BYTES] + "\n\n[...truncated]"
+                temp_path = p.with_suffix(p.suffix + ".truncated.md")
+                temp_path.write_text(truncated, encoding="utf-8")
+                file_to_upload = temp_path
+                temp_paths.append(temp_path)
             else:
                 print(f"Warning: Skipping {p} (binary file too large for grounding)")
                 continue
@@ -63,76 +62,76 @@ def run_research(founder_name: str, company: str, raw_dir: str):
         try:
             artifact = client.files.upload(file=str(file_to_upload))
             artifacts.append(artifact)
-            # Cleanup temp truncated file if created
-            if file_to_upload != p:
-                file_to_upload.unlink()
         except Exception as e:
             print(f"Error uploading {file_to_upload}: {e}")
+            for tp in temp_paths:
+                if tp.exists():
+                    tp.unlink()
             raise
 
-    # 2. Compose prompt
-    prompt_template = Path("prompts/deep_research_prompt.md").read_text()
-    positioning = Path("prompts/kaide_labs_positioning.md").read_text()
-    
+    for tp in temp_paths:
+        if tp.exists():
+            tp.unlink()
+
+    prompt_template = Path("prompts/deep_research_prompt.md").read_text(encoding="utf-8")
+    positioning = Path("prompts/kaide_labs_positioning.md").read_text(encoding="utf-8")
     prompt = (prompt_template
               .replace("{founder_name}", founder_name)
               .replace("{company}", company)
-              .replace("{role}", "Founder") # Defaulting role as it's in the template but not CLI
+              .replace("{role}", "Founder")
               .replace("{inject kaide_labs_positioning.md here}", positioning))
 
-    # Append file contents to prompt as grounding (fallback for multimodal)
-    prompt += "\n\n--- GROUNDING DATA ---\n"
-    for p in files_to_upload:
-        if "linkedin/activity_screenshots" in str(p.as_posix()):
-            continue
-        if p.suffix.lower() in {".md", ".txt", ".html", ".htm"}:
-            try:
-                content = p.read_text(encoding="utf-8", errors="ignore")
-                prompt += f"\n\nSOURCE: {p.name}\n{content[:MAX_ARTIFACT_BYTES]}\n"
-            except Exception as e:
-                print(f"Warning: could not read {p}: {e}")
+    print(f"\nReady to spend ~${ESTIMATED_COST_USD:.2f} on Deep Research Max for "
+          f"{founder_name} at {company} ({len(artifacts)} artifacts attached).")
+    print(f"Ctrl-C within {COST_GATE_SECONDS}s to abort.")
+    try:
+        time.sleep(COST_GATE_SECONDS)
+    except KeyboardInterrupt:
+        print("\nAborted by operator before spend.")
+        sys.exit(130)
 
-    # 3. Kick off Deep Research Max
     print(f"Starting research for {founder_name} at {company}...")
-    
     interaction = client.interactions.create(
         agent=AGENT,
-        input=prompt,
+        input=[prompt, *artifacts],
         background=True,
     )
     print(f"Interaction started: {interaction.id}")
 
-    # 4. Poll
-    while True:
+    current = None
+    for i in range(MAX_POLL_ITERATIONS):
         try:
             current = client.interactions.get(interaction.id)
-            print(f"  status={current.status}")
+            print(f"  [{i+1}/{MAX_POLL_ITERATIONS}] status={current.status}")
             if current.status in TERMINAL_STATUSES:
                 break
         except Exception as e:
             print(f"  Connection error during poll: {e}. Retrying in 5s...")
             time.sleep(5)
             continue
-            
         time.sleep(POLL_INTERVAL_SECONDS)
+    else:
+        print(f"Error: Research did not reach terminal status within "
+              f"{MAX_POLL_ITERATIONS * POLL_INTERVAL_SECONDS // 60} minutes.")
+        print(f"Interaction id (still running, can be polled manually): {interaction.id}")
+        sys.exit(1)
 
-    if current.status != "completed":
-        print(f"Error: Research {current.status}")
-        if hasattr(current, 'error'):
+    if current is None or current.status != "completed":
+        status = current.status if current else "unknown"
+        print(f"Error: Research {status}")
+        if current is not None and hasattr(current, "error"):
             print(f"Reason: {current.error}")
         sys.exit(1)
 
-    # 5. Save output
     dossier_path = raw_path.parent / "dossier.md"
     full_text = ""
     for out in current.outputs:
-        if hasattr(out, 'text') and out.text:
+        if hasattr(out, "text") and out.text:
             full_text += out.text + "\n\n"
-    
     dossier_path.write_text(full_text, encoding="utf-8")
-
     (raw_path.parent / ".interaction_id").write_text(interaction.id)
     print(f"✓ Dossier saved to {dossier_path} (interaction_id={interaction.id})")
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
