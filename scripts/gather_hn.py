@@ -6,7 +6,7 @@ from pathlib import Path
 
 def gather(founder: str, company: str, raw_dir: str, hn_handle: str):
     timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    url = f"https://hn.algolia.com/api/v1/search_by_date?author={hn_handle}&hitsPerPage=200"
+    url = f"https://hn.algolia.com/api/v1/search_by_date?tags=author_{hn_handle}&hitsPerPage=200"
     
     try:
         r = requests.get(url, timeout=30)

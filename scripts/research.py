@@ -80,21 +80,40 @@ def run_research(founder_name: str, company: str, raw_dir: str):
               .replace("{role}", "Founder") # Defaulting role as it's in the template but not CLI
               .replace("{inject kaide_labs_positioning.md here}", positioning))
 
+    # Append file contents to prompt as grounding (fallback for multimodal)
+    prompt += "\n\n--- GROUNDING DATA ---\n"
+    for p in files_to_upload:
+        if "linkedin/activity_screenshots" in str(p.as_posix()):
+            continue
+        if p.suffix.lower() in {".md", ".txt", ".html", ".htm"}:
+            try:
+                content = p.read_text(encoding="utf-8", errors="ignore")
+                prompt += f"\n\nSOURCE: {p.name}\n{content[:MAX_ARTIFACT_BYTES]}\n"
+            except Exception as e:
+                print(f"Warning: could not read {p}: {e}")
+
     # 3. Kick off Deep Research Max
     print(f"Starting research for {founder_name} at {company}...")
+    
     interaction = client.interactions.create(
         agent=AGENT,
-        input=[prompt, *artifacts],
+        input=prompt,
         background=True,
     )
     print(f"Interaction started: {interaction.id}")
 
     # 4. Poll
     while True:
-        current = client.interactions.get(interaction.id)
-        print(f"  status={current.status}")
-        if current.status in TERMINAL_STATUSES:
-            break
+        try:
+            current = client.interactions.get(interaction.id)
+            print(f"  status={current.status}")
+            if current.status in TERMINAL_STATUSES:
+                break
+        except Exception as e:
+            print(f"  Connection error during poll: {e}. Retrying in 5s...")
+            time.sleep(5)
+            continue
+            
         time.sleep(POLL_INTERVAL_SECONDS)
 
     if current.status != "completed":
@@ -105,7 +124,12 @@ def run_research(founder_name: str, company: str, raw_dir: str):
 
     # 5. Save output
     dossier_path = raw_path.parent / "dossier.md"
-    dossier_path.write_text(current.outputs[-1].text, encoding="utf-8")
+    full_text = ""
+    for out in current.outputs:
+        if hasattr(out, 'text') and out.text:
+            full_text += out.text + "\n\n"
+    
+    dossier_path.write_text(full_text, encoding="utf-8")
 
     (raw_path.parent / ".interaction_id").write_text(interaction.id)
     print(f"✓ Dossier saved to {dossier_path} (interaction_id={interaction.id})")

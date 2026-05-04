@@ -54,10 +54,18 @@ async def main(founder: str, company: str, twitter_handle: str = None):
     print(f"{'Script':<20} | {'RC':<3} | {'Size':<10}")
     print("-" * 40)
     
+    GATHERER_MAP = {
+        "gather_yc.py": "yc_page.md",
+        "gather_jobs.py": "company_jobs.md",
+        "gather_twitter.py": "twitter.md",
+        "gather_hn.py": "hn_comments.md",
+        "gather_news.py": "news_coverage.md",
+    }
+    
     failed_count = 0
     for script, rc, stdout, stderr in results:
-        source_name = script.replace("gather_", "").replace(".py", "")
-        out_file = raw_dir / f"{source_name}.md"
+        out_filename = GATHERER_MAP.get(script, "unknown.md")
+        out_file = raw_dir / out_filename
         size = f"{out_file.stat().st_size}B" if out_file.exists() else "MISSING"
         print(f"{script:<20} | {rc:<3} | {size:<10}")
         if rc != 0:
