@@ -1,12 +1,13 @@
 import sys
 
 QUERY_TEMPLATE = """
-Using the Nia MCP server (https://apigcp.trynia.ai/mcp), run a
-universal search (POST /v2/search with mode=universal) for the
+Using the Nia MCP server tools, run a universal search for the
 indexed dossier on {founder_name} at {company}.
 
+CRITICAL INSTRUCTION: Do NOT use local bash scripts, `repos.sh`, or the GitHub CLI to verify the repo. The repo is private and you will get a 404. You MUST ONLY use the Nia MCP search tool (e.g., POST /v2/search with mode=universal) to find the dossier.
+
 Cross-reference these sources:
-- The synthesized dossier.md (in the kaide-recon repo)
+- The synthesized dossier.md (indexed in Nia)
 - Their public GitHub repos
 - Their company's docs site if indexed
 
