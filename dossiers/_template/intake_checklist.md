@@ -15,7 +15,8 @@
 
 ## Agent capture (Playwright)
 - [ ] Twitter timeline + replies (last 90 days, via Nitter)
-- [ ] Personal website / blog
+- [ ] Personal website / blog (personal_site.md)
+- [ ] GitHub profile + repos (github.md)
 - [ ] Top 2 podcast appearances (transcribed)
 - [ ] Substack/Medium archive
 - [ ] HN comment history (HN Algolia API)

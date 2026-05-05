@@ -44,8 +44,34 @@ async def gather(founder: str, company: str, raw_dir: str, handle: str):
     out_file = Path(raw_dir) / "twitter.md"
     out_file.write_text(header + content, encoding="utf-8")
 
-if __name__ == "__main__":
-    if len(sys.argv) < 5:
-        print("Usage: python scripts/gather_twitter.py '<founder>' '<company>' '<raw_dir>' '<twitter_handle>'")
+async def main():
+    if len(sys.argv) < 4:
+        print("Usage: python scripts/gather_twitter.py '<founder>' '<company>' '<raw_dir>' [twitter_handle]")
         sys.exit(2)
-    asyncio.run(gather(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]))
+        
+    founder = sys.argv[1]
+    company = sys.argv[2]
+    raw_dir = sys.argv[3]
+    
+    handle = None
+    if len(sys.argv) >= 5:
+        handle = sys.argv[4]
+    else:
+        handle = os.environ.get("TWITTER_HANDLE")
+        
+    if not handle or handle.strip() == "":
+        out_file = Path(raw_dir) / "twitter.md"
+        out_file.write_text("# Twitter\n\nNo twitter handle provided.\n", encoding="utf-8")
+        sys.exit(0)
+        
+    try:
+        await gather(founder, company, raw_dir, handle)
+    except Exception as e:
+        print(f"Error gathering Twitter: {e}")
+        out_file = Path(raw_dir) / "twitter.md"
+        if not out_file.exists():
+            out_file.write_text(f"# Twitter — {handle}\n\nError occurred during gathering: {e}\n", encoding="utf-8")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    asyncio.run(main())

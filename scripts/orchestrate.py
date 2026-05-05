@@ -2,6 +2,7 @@ import asyncio
 import sys
 import os
 import shutil
+import argparse
 from pathlib import Path
 
 GATHERERS = [
@@ -10,12 +11,14 @@ GATHERERS = [
     "gather_twitter.py",
     "gather_hn.py",
     "gather_news.py",
+    "gather_github.py",
+    "gather_personal_site.py",
 ]
 
-async def run_gatherer(script: str, founder: str, company: str, raw_dir: str, twitter_handle: str = None):
+async def run_gatherer(script: str, founder: str, company: str, raw_dir: str, extra_arg: str = None):
     args = [sys.executable, f"scripts/{script}", founder, company, raw_dir]
-    if script == "gather_twitter.py" and twitter_handle:
-        args.append(twitter_handle)
+    if extra_arg:
+        args.append(extra_arg)
     
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -25,7 +28,23 @@ async def run_gatherer(script: str, founder: str, company: str, raw_dir: str, tw
     stdout, stderr = await proc.communicate()
     return script, proc.returncode, stdout, stderr
 
-async def main(founder: str, company: str, twitter_handle: str = None):
+async def main():
+    parser = argparse.ArgumentParser(description="Orchestrate gathering layer for kaide-recon")
+    parser.add_argument("founder", help="Founder name")
+    parser.add_argument("company", help="Company name")
+    parser.add_argument("--twitter-handle", help="Twitter handle")
+    parser.add_argument("--github-username", help="GitHub username")
+    parser.add_argument("--personal-site-url", help="Personal site URL")
+    
+    # Support legacy positional twitter_handle for backwards compat if needed, 
+    # but the new flag pattern is preferred.
+    # Actually, the spec says "Add THREE optional CLI flags", so I'll follow that.
+    
+    args, unknown = parser.parse_known_args()
+    
+    founder = args.founder
+    company = args.company
+    
     slug = f"{founder.lower().replace(' ', '-')}-{company.lower().replace(' ', '-')}"
     prospect_dir = Path("dossiers") / slug
     raw_dir = prospect_dir / "raw"
@@ -47,12 +66,27 @@ async def main(founder: str, company: str, twitter_handle: str = None):
             checklist_path.write_text(content)
 
     print(f"Starting gathering for {slug}...")
-    tasks = [run_gatherer(s, founder, company, str(raw_dir), twitter_handle) for s in GATHERERS]
+    
+    tasks = []
+    for script in GATHERERS:
+        extra = None
+        if script == "gather_twitter.py":
+            if not args.twitter_handle: continue
+            extra = args.twitter_handle
+        elif script == "gather_github.py":
+            if not args.github_username: continue
+            extra = args.github_username
+        elif script == "gather_personal_site.py":
+            if not args.personal_site_url: continue
+            extra = args.personal_site_url
+            
+        tasks.append(run_gatherer(script, founder, company, str(raw_dir), extra))
+        
     results = await asyncio.gather(*tasks)
 
     print("\nGathering Summary:")
-    print(f"{'Script':<20} | {'RC':<3} | {'Size':<10}")
-    print("-" * 40)
+    print(f"{'Script':<25} | {'RC':<3} | {'Size':<10}")
+    print("-" * 45)
     
     GATHERER_MAP = {
         "gather_yc.py": "yc_page.md",
@@ -60,6 +94,8 @@ async def main(founder: str, company: str, twitter_handle: str = None):
         "gather_twitter.py": "twitter.md",
         "gather_hn.py": "hn_comments.md",
         "gather_news.py": "news_coverage.md",
+        "gather_github.py": "github.md",
+        "gather_personal_site.py": "personal_site.md",
     }
     
     failed_count = 0
@@ -67,7 +103,7 @@ async def main(founder: str, company: str, twitter_handle: str = None):
         out_filename = GATHERER_MAP.get(script, "unknown.md")
         out_file = raw_dir / out_filename
         size = f"{out_file.stat().st_size}B" if out_file.exists() else "MISSING"
-        print(f"{script:<20} | {rc:<3} | {size:<10}")
+        print(f"{script:<25} | {rc:<3} | {size:<10}")
         if rc != 0:
             failed_count += 1
             print(f"  Error in {script}: {stderr.decode()[:2000]}")
@@ -76,12 +112,4 @@ async def main(founder: str, company: str, twitter_handle: str = None):
     sys.exit(failed_count)
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python scripts/orchestrate.py '<founder_name>' '<company>' [twitter_handle]")
-        sys.exit(2)
-    
-    founder = sys.argv[1]
-    company = sys.argv[2]
-    twitter_handle = sys.argv[3] if len(sys.argv) > 3 else None
-    
-    asyncio.run(main(founder, company, twitter_handle))
+    asyncio.run(main())
